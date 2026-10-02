@@ -68,7 +68,14 @@ def pick_track(info):
         return k, "manual", "to-trad"
     if orig and (k := find(manual, [orig.split("-")[0]])):
         return k, "manual", "translate"
+    # Videos with AI-dubbed audio carry one *-orig track per dub language; only the one
+    # matching the video's own language is the real transcript.
     orig_auto = [k for k in auto if k.endswith("-orig")]
+    if orig and (same := [k for k in orig_auto if k.split("-")[0] == orig.split("-")[0]]):
+        orig_auto = same[:1]
+    elif len(orig_auto) > 1:
+        print(f"WARNING: video language unknown, guessing {orig_auto[0]!r} among {orig_auto}; "
+              "override with --track", file=sys.stderr)
     if orig_auto:
         k = orig_auto[0]
         lang = base_lang(k)
