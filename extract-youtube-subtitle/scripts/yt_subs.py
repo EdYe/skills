@@ -2,7 +2,8 @@
 """Fetch YouTube subtitles into timestamped markdown chunks, then merge translated chunks.
 
 Usage:
-  yt_subs.py fetch <url> [--out DIR] [--chunk-chars N] [--cookies-from-browser BROWSER]
+  yt_subs.py fetch <url> [--out DIR] [--chunk-chars N] [--track KEY] [--transcribe]
+                         [--whisper-model NAME] [--cookies-from-browser BROWSER]
   yt_subs.py merge <workdir>
 
 `fetch` writes <workdir>/meta.json, <workdir>/source/NN.md and creates <workdir>/translated/.
@@ -12,6 +13,7 @@ Usage:
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +26,9 @@ TS_RE = re.compile(r"^\[(\d{2}:\d{2}:\d{2})\]\(https://youtu\.be/[^)]+\)", re.M)
 SENTENCE_END = tuple(".?!。？！…\"”'")
 TRAD_ZH = ("zh-Hant", "zh-TW", "zh-HK")
 SIMP_ZH = ("zh-Hans", "zh-CN", "zh-SG", "zh")
+WHISPER_MODEL = "large-v3-turbo"
+WHISPER_MODEL_DIR = Path.home() / ".cache" / "whisper-cpp"
+KIND_LABEL = {"manual": "人工字幕", "auto": "自動產生字幕", "transcribed": "語音轉錄"}
 
 
 def die(msg):
@@ -85,7 +90,64 @@ def pick_track(info):
         return k, "manual", "translate"
     if manual:
         return next(iter(manual)), "manual", "translate"
-    die("this video has no subtitles or auto captions at all")
+    return None
+
+
+def whisper_model_path(name):
+    """Return the ggml model file for `name`, downloading it into WHISPER_MODEL_DIR on first use."""
+    if "/" in name or name.endswith(".bin"):
+        path = Path(name).expanduser()
+        if not path.exists():
+            die(f"whisper model not found: {path}")
+        return path
+    path = WHISPER_MODEL_DIR / f"ggml-{name}.bin"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        url = f"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{name}.bin"
+        print(f"Downloading whisper model {name} -> {path} (one-time, may take minutes)", file=sys.stderr)
+        tmp = path.with_suffix(".part")
+        r = subprocess.run(["curl", "-fsSL", "-o", str(tmp), url])
+        if r.returncode != 0:
+            tmp.unlink(missing_ok=True)
+            die(f"failed to download whisper model from {url}")
+        tmp.rename(path)
+    return path
+
+
+def transcribe(info, work, model, cookies):
+    """Download the original-language audio and run whisper.cpp on it.
+
+    Returns (cues, lang) where cues match parse_json3's [(start_ms, end_ms, text)].
+    """
+    if not shutil.which("whisper-cli"):
+        die("no subtitles on this video, and whisper-cli is missing for the audio fallback.\n"
+            "Install it with: brew install whisper-cpp")
+    model_path = whisper_model_path(model)
+    lang = (info.get("language") or "").split("-")[0]
+    # Dubbed videos carry several audio tracks; take the one in the video's own language.
+    fmt = f"ba[language^={lang}]/ba" if lang else "ba"
+    args = ["-f", fmt, "-x", "--audio-format", "wav",
+            "--postprocessor-args", "ExtractAudio:-ar 16000 -ac 1",
+            "-o", str(work / "audio.%(ext)s"), f"https://www.youtube.com/watch?v={info['id']}"]
+    yt_dlp(args, cookies)
+    audio = work / "audio.wav"
+    if not audio.exists():
+        die(f"audio not downloaded: {audio}")
+
+    out = work / "raw.whisper"
+    print(f"Transcribing with whisper.cpp ({model_path.name}), this can take a while...", file=sys.stderr)
+    r = subprocess.run(["whisper-cli", "-m", str(model_path), "-f", str(audio), "-l", lang or "auto",
+                        "-oj", "-of", str(out), "-np"], capture_output=True, text=True)
+    if r.returncode != 0:
+        die(f"whisper-cli failed:\n{r.stderr.strip()[-2000:]}")
+    result = json.loads((work / "raw.whisper.json").read_text(encoding="utf-8", errors="replace"))
+    cues = []
+    for seg in result.get("transcription", []):
+        text = re.sub(r"\s+", " ", seg.get("text", "")).strip()
+        if text:
+            cues.append((seg["offsets"]["from"], seg["offsets"]["to"], text))
+    audio.unlink()
+    return cues, lang or result.get("result", {}).get("language", "")
 
 
 def parse_json3(path):
@@ -145,27 +207,37 @@ def safe_name(title):
 def cmd_fetch(a):
     info = json.loads(yt_dlp(["-J", "--skip-download", "--no-playlist", a.url], a.cookies_from_browser))
     vid = info["id"]
-    key, kind, mode = pick_track(info)
+    picked = None if a.transcribe else pick_track(info)
     if a.track:
         auto = info.get("automatic_captions") or {}
         if a.track not in auto and a.track not in (info.get("subtitles") or {}):
             die(f"track {a.track!r} not available")
         kind = "manual" if a.track in (info.get("subtitles") or {}) else "auto"
         lang = base_lang(a.track)
-        key, mode = a.track, "copy" if lang in TRAD_ZH else "to-trad" if lang in SIMP_ZH else "translate"
+        picked = a.track, kind, "copy" if lang in TRAD_ZH else "to-trad" if lang in SIMP_ZH else "translate"
     work = Path(a.out or f"yt-{vid}").resolve()
     (work / "source").mkdir(parents=True, exist_ok=True)
     (work / "translated").mkdir(exist_ok=True)
 
-    flag = "--write-subs" if kind == "manual" else "--write-auto-subs"
-    yt_dlp(["--skip-download", flag, "--sub-langs", key, "--sub-format", "json3",
-            "-o", str(work / "raw.%(ext)s"), f"https://www.youtube.com/watch?v={vid}"],
-           a.cookies_from_browser)
-    raw = work / f"raw.{key}.json3"
-    if not raw.exists():
-        die(f"subtitle file not downloaded: {raw}")
+    if picked:
+        key, kind, mode = picked
+        flag = "--write-subs" if kind == "manual" else "--write-auto-subs"
+        yt_dlp(["--skip-download", flag, "--sub-langs", key, "--sub-format", "json3",
+                "-o", str(work / "raw.%(ext)s"), f"https://www.youtube.com/watch?v={vid}"],
+               a.cookies_from_browser)
+        raw = work / f"raw.{key}.json3"
+        if not raw.exists():
+            die(f"subtitle file not downloaded: {raw}")
+        cues = parse_json3(raw)
+    else:
+        if not a.transcribe:
+            print("No subtitles or auto captions; falling back to whisper.cpp transcription.", file=sys.stderr)
+        cues, lang = transcribe(info, work, a.whisper_model, a.cookies_from_browser)
+        # Whisper writes Chinese as Simplified or a mix, so never copy it as-is.
+        key, kind = f"whisper:{Path(a.whisper_model).name.removeprefix('ggml-').removesuffix('.bin')}", "transcribed"
+        mode = "to-trad" if lang == "zh" else "translate"
 
-    paras = paragraphs(parse_json3(raw))
+    paras = paragraphs(cues)
     if not paras:
         die("subtitle track is empty")
 
@@ -236,7 +308,7 @@ def cmd_merge(a):
             print(f"  - {p}", file=sys.stderr)
         sys.exit(1)
 
-    kind = "人工字幕" if meta["kind"] == "manual" else "自動產生字幕"
+    kind = KIND_LABEL[meta["kind"]]
     d = meta["upload_date"]
     header = [
         f"# {meta['title']}", "",
@@ -260,6 +332,11 @@ def main():
     f.add_argument("--out", help="work directory (default: ./yt-<video id>)")
     f.add_argument("--chunk-chars", type=int, default=8000, help="max source characters per chunk")
     f.add_argument("--track", help="force a subtitle track key, e.g. en-orig (see yt-dlp --list-subs)")
+    f.add_argument("--transcribe", action="store_true",
+                   help="ignore subtitles and transcribe the audio with whisper.cpp (automatic when none exist)")
+    f.add_argument("--whisper-model", default=WHISPER_MODEL,
+                   help=f"whisper.cpp model name or .bin path (default: {WHISPER_MODEL}, "
+                        f"downloaded to {WHISPER_MODEL_DIR})")
     f.add_argument("--cookies-from-browser", help="e.g. chrome, when YouTube asks for sign-in")
     m = sub.add_parser("merge")
     m.add_argument("workdir")
