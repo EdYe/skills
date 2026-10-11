@@ -24,6 +24,15 @@ This skill translates an entire English EPUB book into per-chapter Traditional C
 4. **Any chapters to skip?**: Sometimes the user only wants specific chapters (e.g., skip foreword, index).
 5. **Chapter split threshold**: At what word count should chapters be automatically split? (Default: 8,000 English words, produces ~15,000 Chinese characters)
 
+## Step 0: Build the Glossary FIRST (do not skip)
+
+**This is the single highest-leverage step.** Parallel translation agents independently coin different Chinese terms for the same English term (observed in practice: one book produced three renderings of "thesaurus" plus divergent reasoner/semantics/linked-data/metadata terms). Unifying them afterwards costs more than the translation itself.
+
+1. Extract the book's core technical terms and standard zh-TW renderings from the book's glossary/index, TOC, and domain-standard translations (30-70 terms typical). If a glossary chapter is among the outputs, translate it first and treat its renderings as canonical.
+2. **Inject the full glossary into every translator agent's prompt**: "Use these exact renderings. Do not coin alternatives."
+3. **Proper-noun exemption list**: established proper-noun translations (e.g. Getty AAT＝藝術與建築索引典) stay as-is, exempt from unification.
+4. If divergence still occurs, unify by **majority vote via grep count** across output files, then sed, then verify count is zero — deterministic, no LLM debate.
+
 ## Step 1: Parse the EPUB Structure
 
 First, install ebooklib if needed:
@@ -166,9 +175,13 @@ Apply these rules consistently across all chapters:
 - When in doubt about whether to keep English, use the "中文（English）" format
 
 **Code blocks:**
-- Keep code in the original language (English)
-- Translate code comments into Chinese
+- Fenced code blocks are **verbatim** — do NOT translate code content, strings, or language tags (observed failure: Turtle translated into Chinese while leaving `@en` tags, corrupting the RDF). Only code comments may be translated.
 - Translate all surrounding explanation text
+
+**Punctuation (state this in every translator agent prompt):**
+- Chinese prose uses fullwidth punctuation: ，：（）；？！「」
+- Code blocks, CSV data, URLs, standard codes, English table content keep halfwidth punctuation
+- Without this rule, agents pick different styles and the retroactive fix costs hundreds of lines per chapter
 
 **Figures and tables:**
 - Format figure captions as: `> **圖 X-Y.** 翻譯後的圖說`
@@ -241,15 +254,24 @@ Steps:
 
 This keeps the first part as the "main" file while clearly labeling subsequent parts.
 
+**Alternative: concatenate into one file** (avoids renumbering `part` files into one chapter later): translate each part to a temp file (`.tmp-<chapter>-part<M>.md`), then the orchestrator concatenates parts in order into the final `<chapter>.md` and deletes the temp files. **Compute split boundaries once in the orchestrator** — assign each agent an explicit non-overlapping section range. Letting translator agents negotiate boundaries with each other produced a duplicated-range conflict in practice.
+
+**Assembly-seam check (mandatory for concatenated split chapters):** at each join, read 2-3 paragraphs before and after the seam against the source. Observed seam defects: duplicated characters (「的的」), dropped copulas (是), invented introductory paragraphs not in the source, punctuation style switching between halves (halfwidth vs fullwidth). Fix seams before final verification. Also verify `grep -c '^#'` parity chapter files vs source sections — the cheapest structural check for missing or duplicated sections.
+
 ## Step 4: Verify Completeness
 
 After all chapters are translated:
 
 1. **Count files**: Verify the expected number of `.md` files exist (include split parts)
 2. **Check sizes**: Files should be non-empty and reasonably sized
-3. **Spot-check sections**: For each file, verify that all major section headings from the original are present
-4. **Verify continuity**: For split chapters, check that part 2+ start with `> （接上一節）` continuity notes
-5. **Report to user**: Show a summary table with file names and sizes
+3. **Spot-check sections**: For each file, verify that all major section headings from the original are present (`grep -c '^#'` parity against the source)
+4. **Verify continuity**: For split chapters, check that part 2+ start with `> （接上一節）` continuity notes, and run the assembly-seam check
+5. **Simplified-character scan**: the target is Traditional Chinese but agents leak simplified characters (observed: 本体、来、采取、个、轮、员工). Do NOT hand-roll a character set — hand-picked sets false-positive on shared chars (移/骨/送/群/台/准 are valid Traditional). Run the bundled simplified-exclusive check instead (needs `pip install --user opencc-python-reimplemented`):
+   ```bash
+   python3 <skill-dir>/scripts/scan_simplified.py <output-dir>/*.md   # prints file:line: 体→體 ...; exit 1 if any hit
+   ```
+6. **Term-consistency sweep**: grep every non-canonical term variant from Step 0 — count must be 0. Deterministic. Reserve LLM spot checks for semantic fidelity (mistranslation, reversed negation, invented content) which grep cannot catch.
+7. **Report to user**: Show a summary table with file names and sizes
 
 ```bash
 ls -lhS <output-dir>/
