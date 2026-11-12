@@ -6,7 +6,6 @@ description: >
   into Traditional Chinese, in English or Chinese phrasing (e.g. 翻譯書籍、翻譯PDF).
   This skill handles the full pipeline: PDF text extraction, chapter detection, parallel translation, and
   quality verification.
-context: fork
 ---
 
 # Translate English PDF Book to Traditional Chinese Markdown

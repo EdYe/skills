@@ -6,7 +6,6 @@ description: >
   in English or Chinese phrasing (e.g. 翻譯 EPUB、電子書翻譯).
   This skill handles the full pipeline: EPUB parsing with ebooklib, chapter detection, parallel translation,
   and quality verification.
-context: fork
 ---
 
 # Translate English EPUB Book to Traditional Chinese Markdown
