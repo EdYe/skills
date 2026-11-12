@@ -2,9 +2,8 @@
 name: translate-epub
 description: >
   Translate an English EPUB book into Traditional Chinese (繁體中文) markdown files, one file per chapter.
-  Use this skill whenever the user wants to translate an EPUB ebook into Traditional Chinese markdown.
-  Also trigger when the user mentions: 翻譯 EPUB、EPUB 翻譯、電子書翻譯、translate EPUB to Chinese,
-  epub to markdown translation, or similar requests involving EPUB book translation.
+  Use when the user wants an English EPUB ebook translated into Traditional Chinese markdown,
+  in English or Chinese phrasing (e.g. 翻譯 EPUB、電子書翻譯).
   This skill handles the full pipeline: EPUB parsing with ebooklib, chapter detection, parallel translation,
   and quality verification.
 context: fork

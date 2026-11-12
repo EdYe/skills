@@ -2,9 +2,8 @@
 name: translate-pdf
 description: >
   Translate an English PDF book into Traditional Chinese (繁體中文) markdown files, one file per chapter.
-  Use this skill whenever the user wants to translate a PDF book (or large PDF document with chapters/sections)
-  into Traditional Chinese markdown. Also trigger when the user mentions: 翻譯書籍、翻譯PDF、英文書翻中文、
-  書籍翻譯成繁體中文、translate book to Chinese, or similar requests involving book-length PDF translation.
+  Use when the user wants a book-length English PDF (or a long PDF with chapters/sections) translated
+  into Traditional Chinese, in English or Chinese phrasing (e.g. 翻譯書籍、翻譯PDF).
   This skill handles the full pipeline: PDF text extraction, chapter detection, parallel translation, and
   quality verification.
 context: fork
