@@ -42,6 +42,7 @@ pip install --break-system-packages ebooklib 2>/dev/null || pip install ebooklib
 Then extract the EPUB structure and identify chapters:
 
 ```python
+import ebooklib
 from ebooklib import epub
 import os
 
@@ -102,7 +103,7 @@ def extract_chapter_text(epub_path, chapter_name):
             break
     
     if not chapter_item:
-        return None, []
+        return None, [], 0
     
     html_content = chapter_item.get_content().decode('utf-8')
     soup = BeautifulSoup(html_content, 'html.parser')
