@@ -65,7 +65,7 @@ Build a chapter map:
 | File name | Chapter title | Source HTML | Estimated word count |
 |-----------|--------------|-------------|---------------------|
 
-**Chapter splitting threshold**: By default, chapters over **8,000 words** (or ~15,000 Chinese characters after translation) will be automatically split by major sections (detected by `##` headings). The user can adjust this threshold.
+**Chapter splitting threshold**: By default, chapters over **8,000 words** (or ~15,000 Chinese characters after translation) will be automatically split by major sections (the `h1`–`h3` headings that `extract_chapter_text` splits on). The user can adjust this threshold.
 
 ## Step 2: Create a Translation Plan
 
@@ -73,14 +73,16 @@ Present the chapter map to the user and confirm before proceeding. The plan shou
 
 - Output file naming convention (e.g., `00-preface.md`, `01-chapter-title.md`, `glossary.md`)
 - Which chapters will be translated
-- Which chapters exceed the split threshold and will be divided into parts (e.g., `05-long-chapter-part1.md`, `05-long-chapter-part2.md`)
+- Which chapters exceed the split threshold; each is translated in parts and concatenated back into one chapter file
 - Estimated time per chapter
 
 Create the output directory:
 
 ```bash
-mkdir -p <output-directory>
+mkdir -p <output-directory>/.tmp
 ```
+
+All temp files go in `<output-directory>/.tmp/`, so books translated at the same time never share temp paths.
 
 ## Step 3: Extract and Translate Each Chapter
 
@@ -155,8 +157,8 @@ else:
 ```
 
 Write extracted text to temp files:
-- For non-split chapters: `/tmp/ch<N>.txt`
-- For split chapters: `/tmp/ch<N>_part<M>.txt` (one per section)
+- For non-split chapters: `<output-dir>/.tmp/ch<N>.txt`
+- For split chapters: `<output-dir>/.tmp/ch<N>_part<M>.txt` (one per section)
 
 ### Translation Rules
 
@@ -210,61 +212,53 @@ Agent prompt: "Translate Chapter N of <book-title> from English to Traditional C
 
 EPUB path: <path>
 Output file: <output-dir>/<filename>.md
-Temp file: /tmp/ch<N>.txt
+Temp file: <output-dir>/.tmp/ch<N>.txt
 
 Translation rules:
 [include the rules above]
 
 Steps:
-1. Read extracted text from /tmp/ch<N>.txt
+1. Read extracted text from the temp file
 2. Translate to Traditional Chinese following the rules
 3. Write the complete translated chapter to <output-dir>/<filename>.md
 4. Verify the file was written and is non-empty"
 ```
 
-**For chapters that exceed the threshold (over ~8,000 words)**, split into multiple parts by section:
+**For chapters that exceed the threshold (over ~8,000 words)**, the orchestrator computes the split boundaries once and assigns each agent an explicit, non-overlapping section range. Letting translator agents negotiate boundaries with each other produced a duplicated-range conflict in practice.
 
 ```
 Agent prompt (one per part): "Translate Part M of Chapter N from English to Traditional Chinese.
 
 EPUB path: <path>
-Output file: <output-dir>/<chapter-base-name>-part<M>.md
-Temp file: /tmp/ch<N>_part<M>.txt
+Output file: <output-dir>/.tmp/<chapter-base-name>-part<M>.md
+Source file: <output-dir>/.tmp/ch<N>_part<M>.txt
 
 This is part M of K total parts for this chapter. The output should:
-- Start with `# Chapter Title - Part M` for parts 2+, or `# Chapter Title` for part 1
-- Include a continuity note if this is not part 1: `> （接上一節）`
-- Translate only the content from /tmp/ch<N>_part<M>.txt
+- Start with `# Chapter Title` for part 1; parts 2+ start directly at their first section heading (no chapter title, no continuity note)
+- Translate only the content of the source file
 
 Translation rules:
 [include the rules above]
 
 Steps:
-1. Read extracted text from /tmp/ch<N>_part<M>.txt
+1. Read the source file
 2. Translate to Traditional Chinese
-3. Write to <output-dir>/<chapter-base-name>-part<M>.md
+3. Write to the output file
 4. Verify the file was written"
 ```
 
-**Output file naming for split chapters:**
-- Part 1: `05-chapter-title.md`
-- Part 2: `05-chapter-title-part2.md`
-- Part 3: `05-chapter-title-part3.md`
+After all parts are done, the orchestrator concatenates them in order into `<output-dir>/<chapter-base-name>.md` and deletes the part files.
 
-This keeps the first part as the "main" file while clearly labeling subsequent parts.
-
-**Alternative: concatenate into one file** (avoids renumbering `part` files into one chapter later): translate each part to a temp file (`.tmp-<chapter>-part<M>.md`), then the orchestrator concatenates parts in order into the final `<chapter>.md` and deletes the temp files. **Compute split boundaries once in the orchestrator** — assign each agent an explicit non-overlapping section range. Letting translator agents negotiate boundaries with each other produced a duplicated-range conflict in practice.
-
-**Assembly-seam check (mandatory for concatenated split chapters):** at each join, read 2-3 paragraphs before and after the seam against the source. Observed seam defects: duplicated characters (「的的」), dropped copulas (是), invented introductory paragraphs not in the source, punctuation style switching between halves (halfwidth vs fullwidth). Fix seams before final verification. Also verify `grep -c '^#'` parity chapter files vs source sections — the cheapest structural check for missing or duplicated sections.
+**Assembly-seam check (mandatory for split chapters):** at each join, read 2-3 paragraphs before and after the seam against the source. Observed seam defects: duplicated characters (「的的」), dropped copulas (是), invented introductory paragraphs not in the source, punctuation style switching between halves (halfwidth vs fullwidth). Fix seams before final verification. Also verify `grep -c '^#'` parity chapter files vs source sections — the cheapest structural check for missing or duplicated sections.
 
 ## Step 4: Verify Completeness
 
 After all chapters are translated:
 
-1. **Count files**: Verify the expected number of `.md` files exist (include split parts)
+1. **Count files**: Verify one `.md` file exists per planned chapter
 2. **Check sizes**: Files should be non-empty and reasonably sized
 3. **Spot-check sections**: For each file, verify that all major section headings from the original are present (`grep -c '^#'` parity against the source)
-4. **Verify continuity**: For split chapters, check that part 2+ start with `> （接上一節）` continuity notes, and run the assembly-seam check
+4. **Split chapters**: run the assembly-seam check above
 5. **Simplified-character scan**: the target is Traditional Chinese but agents leak simplified characters (observed: 本体、来、采取、个、轮、员工). Do NOT hand-roll a character set — hand-picked sets false-positive on shared chars (移/骨/送/群/台/准 are valid Traditional). Run the bundled simplified-exclusive check instead (needs `pip install --user opencc-python-reimplemented`):
    ```bash
    python3 <skill-dir>/scripts/scan_simplified.py <output-dir>/*.md   # prints file:line: 体→體 ...; exit 1 if any hit
@@ -276,14 +270,7 @@ After all chapters are translated:
 ls -lhS <output-dir>/
 ```
 
-**Expected output pattern for split chapters:**
-```
-01-introduction.md          (complete chapter)
-05-long-chapter.md          (part 1 of split chapter)
-05-long-chapter-part2.md    (part 2 of split chapter)
-05-long-chapter-part3.md    (part 3 of split chapter)
-06-next-chapter.md          (complete chapter)
-```
+Then delete `<output-dir>/.tmp/`.
 
 ## Troubleshooting
 
@@ -295,6 +282,6 @@ ls -lhS <output-dir>/
 
 **Chapter split produces too many parts**: If a chapter has many small sections, consider raising the split threshold (e.g., 10,000 or 12,000 words) or only splitting at `h1`/`h2` headings.
 
-**Split chapter parts feel disjointed**: Ensure each part after part 1 starts with a continuity note `> （接上一節）`. For heavily interconnected content, consider translating the whole chapter in the main conversation instead of splitting.
+**Split chapter reads disjointed at the seams**: fix it in the assembly-seam check. For heavily interconnected content, translate the whole chapter in the main conversation instead of splitting.
 
 **Missing sections in translation**: Compare the section headings in the translated file against the original EPUB's navigation document (NCX or NAV HTML). Re-extract and re-translate any missing sections.

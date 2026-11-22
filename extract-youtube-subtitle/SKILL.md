@@ -2,7 +2,6 @@
 name: extract-youtube-subtitle
 description: >
   YouTube 字幕翻譯成繁體中文 markdown。Use when the user gives a YouTube URL and wants its subtitles in Chinese.
-context: fork
 ---
 
 # YouTube 字幕 → 繁體中文 Markdown

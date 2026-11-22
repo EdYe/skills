@@ -75,8 +75,10 @@ Present the chapter map to the user and confirm before proceeding. The plan shou
 Create the output directory:
 
 ```bash
-mkdir -p <output-directory>
+mkdir -p <output-directory>/.tmp
 ```
+
+All temp files go in `<output-directory>/.tmp/`, so books translated at the same time never share temp paths. Delete it after the final report.
 
 ## Step 3: Translate Each Chapter
 
@@ -95,7 +97,7 @@ for page_num in range(start_page - 1, end_page):  # fitz uses 0-indexed pages
     text += page.get_text()
 ```
 
-Write extracted text to a temp file (e.g., `/tmp/ch<N>_part<M>.txt`), then read it into context for translation.
+Write extracted text to a temp file (e.g., `<output-dir>/.tmp/ch<N>_part<M>.txt`), then read it into context for translation.
 
 ### Translation Rules
 
@@ -154,14 +156,14 @@ Translation rules:
 [include the rules above]
 
 Steps:
-1. Use Python with fitz to extract text from pages X to Y, write to /tmp/chN.txt
+1. Use Python with fitz to extract text from pages X to Y, write to <output-dir>/.tmp/chN.txt
 2. Read the extracted text
 3. Translate to Traditional Chinese following the rules
 4. Write the complete translated chapter to the output file
 5. Verify the file was written and is non-empty"
 ```
 
-**For chapters over ~40 pages**, the agent's context window may fill up before it finishes writing. Two strategies:
+**For chapters over ~40 pages**, the agent's context window may fill up before it finishes writing. Three strategies:
 
 1. **Split into sub-agents**: Have one agent handle pages X to X+20 and another handle X+21 to Y, then combine
 2. **Write incrementally**: Instruct the agent to extract and translate in smaller batches, appending to the output file after each batch
@@ -181,7 +183,7 @@ After all chapters are translated:
 2. **Check sizes**: Files should be non-empty and reasonably sized (a 30-page chapter typically produces 40-80 KB of Chinese markdown)
 3. **Heading-count parity**: `grep -c '^#' source.md` must equal `grep -c '^#' translated.md` for every file. This is the cheapest structural check — it caught assembling errors that prose review missed. (Beware `#` comment lines inside code blocks inflating counts on the translated side; compare section titles, not raw counts, if unsure.)
 4. **Assembly-seam check** (split chapters only): at each join, read 2-3 paragraphs before and after the seam against the source. Typical seam defects observed in practice: duplicated characters/words (「的的」), dropped copulas (「X 是 Y」 losing 是), an agent inventing an extra introductory paragraph the source doesn't have, punctuation style switching between halves. Fix seams before anything else.
-5. **Simplified-character scan**: the target is Traditional Chinese but agents leak simplified characters (observed: 本体、來/来、採取/采取、個/个、輪/轮、員工/员工). Do NOT hand-roll a character set for this — hand-picked sets produce false positives because many chars are shared between scripts (移/骨/送/群/台/准 are all valid Traditional). Use a simplified-exclusive check or OpenCC s2t round-trip instead:
+5. **Simplified-character scan**: the target is Traditional Chinese but agents leak simplified characters (observed: 本体、來/来、採取/采取、個/个、輪/轮、員工/员工). Do NOT hand-roll a character set for this — hand-picked sets produce false positives because many chars are shared between scripts (移/骨/送/群/台/准 are all valid Traditional). Run the bundled simplified-exclusive check instead:
    ```bash
    python3 -c "import opencc" 2>/dev/null || pip install --user opencc-python-reimplemented
    python3 <skill-dir>/scripts/scan_simplified.py <output-dir>/*.md   # prints file:line: 体→體 ...; exit 1 if any hit
