@@ -140,7 +140,7 @@ Apply these rules consistently across all chapters:
 
 ### Parallel Translation Strategy
 
-Use the Agent tool to translate multiple chapters in parallel. Each agent handles one chapter (or two small chapters).
+Use the Agent tool to translate multiple chapters in parallel, with `model: "sonnet"` for every translator agent. Each agent handles one chapter (or two small chapters).
 
 **For chapters under ~40 pages**, a single agent can handle extraction + translation:
 

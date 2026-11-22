@@ -41,7 +41,7 @@ python3 <skill-dir>/scripts/yt_subs.py fetch "<YouTube URL>" --out <工作目錄
 
 `kind=transcribed` 的中文影片一律是 `to-trad`，因為 Whisper 常輸出簡體或繁簡混雜。
 
-chunk 超過 3 個時，用 Agent tool 平行處理，每個 agent 負責一個 chunk，prompt 附上下方規則。
+chunk 超過 3 個時，用 Agent tool 平行處理，每個 agent 負責一個 chunk，指定 `model: "sonnet"`，prompt 附上下方規則。
 
 翻譯規則：
 
